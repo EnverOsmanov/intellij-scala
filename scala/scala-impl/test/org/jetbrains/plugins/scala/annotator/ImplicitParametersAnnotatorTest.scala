@@ -413,6 +413,22 @@ class ImplicitParametersAnnotatorHeavyTest extends ScalaLightCodeInsightFixtureT
     """.stripMargin
   }
 
+  def testExpectedSearchImplicitFirst(): Unit = {
+    checkTextHasNoErrors(
+      s"""
+         |trait Monoid[T]
+         |
+         |case class A(a: String, b: Int)
+         |
+         |val list: List[A] = List(A("", 1))
+         |
+         |implicit val intMonoid: Monoid[Int] = null
+         |
+         |def foldMap[A, B](list: List[A])(f: A => B)(implicit m: Monoid[B]): B = f(list.head)
+         |
+         |val x: Double = foldMap(list)(_.b)""".stripMargin)
+  }
+
 }
 
 class ImplicitParameterFailingTest extends ScalaLightCodeInsightFixtureTestAdapter {

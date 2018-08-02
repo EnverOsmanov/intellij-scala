@@ -233,7 +233,7 @@ class ExpectedTypesImpl extends ExpectedTypes {
           else mapResolves(operation.shapeResolve, operation.shapeMultiType)
 
         val updated = tps.map { case (tp, isDynamicNamed) =>
-          (tp.map(infix.updateAccordingToExpectedType), isDynamicNamed)
+          (tp.map(infix.updateWithImplicitsAndExpected), isDynamicNamed)
         }
 
         val res = new ArrayBuffer[ParameterType]
@@ -291,7 +291,7 @@ class ExpectedTypesImpl extends ExpectedTypes {
             case _ => None
           }
           callOption.foreach(call => tps = tps.map { case (r, isDynamicNamed) =>
-            (r.map(call.updateAccordingToExpectedType), isDynamicNamed)
+            (r.map(call.updateWithImplicitsAndExpected), isDynamicNamed)
           })
           tps.filterNot(_._1.exists(_.equiv(Nothing)))foreach { case (r, isDynamicNamed) =>
             processArgsExpected(res, expr, r, exprs, i, callOption, isDynamicNamed = isDynamicNamed)
@@ -386,7 +386,7 @@ class ExpectedTypesImpl extends ExpectedTypes {
           val applyMethodType = polyType
             .updateTypeOfDynamicCall(r.isDynamic)
 
-          val updatedMethodCall = call.map(_.updateAccordingToExpectedType(applyMethodType))
+          val updatedMethodCall = call.map(_.updateWithImplicitsAndExpected(applyMethodType))
             .getOrElse(applyMethodType)
 
           Some((Right(updatedMethodCall), isApplyDynamicNamed(r)))
@@ -571,8 +571,43 @@ private object ExpectedTypesImpl {
 
   implicit class ScMethodCallEx(private val invocation: MethodInvocation) extends AnyVal {
 
-    def updateAccordingToExpectedType(`type`: ScType): ScType =
+    /** We are computing expected type of an expression in argument position.
+      * @param methodType non-value type of a containing method invocation
+      * @return non-value type updated with information from implicit arguments and expected type of an invocation
+      */
+    def updateWithImplicitsAndExpected(methodType: ScType): ScType = {
+      val needImplicits = needUpdateImplicitParams(methodType)
+
+      def isProblematicImplicitArgument(arg: ScalaResolveResult) =
+        arg.isImplicitParameterProblem || arg.unresolvedTypeParameters.nonEmpty
+
+      val updatedWithImplicits =
+        if (needImplicits)
+          invocation.updatedWithImplicitParameters(methodType, checkExpectedType = false) match {
+            case (updated, Some(args)) if !args.exists(isProblematicImplicitArgument) => updated
+            case _ => methodType
+          }
+        else methodType
+
+      updateAccordingToExpectedType(updatedWithImplicits)
+    }
+
+    private def updateAccordingToExpectedType(`type`: ScType): ScType =
       InferUtil.updateAccordingToExpectedType(`type`, fromImplicitSearch = false, filterTypeParams = false, invocation.expectedType(), invocation, canThrowSCE = false)
+
+  }
+
+  /** @return true, if containing method invocation requires implicit arguments
+    *         in this case, we need to search them first, before updating argument expression with expected type of an invocation
+    */
+  private def needUpdateImplicitParams(methodType: ScType, firstCall: Boolean = true): Boolean = methodType match {
+    case ScTypePolymorphicType(mt: ScMethodType, _) => needUpdateImplicitParams(mt, firstCall = false)
+    case ScMethodType(mt: ScMethodType, _, _)       => needUpdateImplicitParams(mt, firstCall = false)
+
+    // isImplicit on first level means we are computing expected type for explicitly passed implicit argument,
+    // so we don't need to do implicit search
+    case ScMethodType(_, _, isImplicit)             => isImplicit && !firstCall
+    case _                                          => false
   }
 
   implicit class ScExpressionForExpectedTypesEx(val expr: ScExpression) extends AnyVal {
@@ -601,5 +636,4 @@ private object ExpectedTypesImpl {
       cand
     }
   }
-
 }
